@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 BASE_DIR = "part1/raw_results"
 CONFIGS = ["no_interference", "cpu", "l1d", "l1i", "l2", "llc", "membw"]
-
+MARKERS = ['o', '^', 's', 'x', 'D', 'v', '*']
 
 def parse_file(filepath):
     qps_list = []
@@ -62,7 +62,7 @@ def aggregate_config(config):
 def plot_all():
     plt.figure(figsize=(10, 6))
 
-    for config in CONFIGS:
+    for idx, config in enumerate(CONFIGS):
         mean_qps, std_qps, mean_p95, std_p95 = aggregate_config(config)
 
         mean_p95 /= 1000
@@ -73,7 +73,7 @@ def plot_all():
             mean_p95,
             xerr=std_qps,
             yerr=std_p95,
-            marker='o',
+            marker=MARKERS[idx],
             capsize=3,
             label=config
         )

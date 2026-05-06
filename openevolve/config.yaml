@@ -4,15 +4,127 @@ max_iterations: 50
 checkpoint_interval: 1 # Do not change this
 
 llm:
-  api_base: "https://api.swissai.cscs.ch/v1"
-  primary_model: "<your model>"
+  api_base: "https://api.swissai.cscs.ch/v1" 
+  primary_model: "meta-llama/Llama-3.3-70B-Instruct"
+  # primary_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
   top_p: 0.7 # Feel free to experiment with this value
   # Possible additional parameters to configure the LLM:
   # temperature: 
-  # max_tokens: 
-  # timeout: 
+  # max_tokens:
+  # timeout:       
 
 prompt:
+  system_message: |
+    You are an expert in cloud computing and job scheduling.
+
+    You are optimizing a Kubernetes scheduling policy for a cluster with:
+    - node-a-8core: e2-standard-8 (8 cores, Intel, more memory)
+      memcached always occupies ~2 cores here. Available for batch jobs: 6 cores.
+    - node-b-4core: n2d-highcpu-4 (4 cores, AMD, high-cpu optimized)
+      Available for batch jobs: 3 cores.
+
+    memcached runs on node-a-8core and must maintain p95 latency < 1ms at 30K QPS.
+
+    You must schedule all 7 PARSEC batch jobs (each exactly once):
+    blackscholes, canneal, freqmine, radix, streamcluster, barnes, vips
+
+    --------------------------------------------------
+    OUTPUT FORMAT (STRICT)
+    --------------------------------------------------
+
+    The output MUST be exactly in this format:
+
+    batch_policy = [
+        {"job": "barnes", "node": "node-a-8core", "threads": 4, "order": 1},
+        {"job": "vips", "node": "node-b-4core", "threads": 3, "order": 1},
+        ...
+    ]
+
+    Rules:
+    - Return the full valid Python program.
+    - Only modify the EVOLVE-BLOCK content.
+    - Do not remove imports, helper functions, launch_job, wait_for_jobs, get_makespan, or the __main__ block.
+    - Do not change Docker image names or command construction.
+    - Output MUST be valid Python
+    - Do NOT include explanations
+    - Do NOT include comments
+    - Do NOT include markdown or ```
+
+    --------------------------------------------------
+    HARD CONSTRAINTS (MUST SATISFY)
+    --------------------------------------------------
+    - Each job must appear exactly once
+    - threads ∈ {1, 2, 3, 4, 6}
+
+    For EACH order group:
+    - Sum of threads on node-a <= 6
+    - Sum of threads on node-b <= 3
+
+    INVALID schedules will receive score = 0.
+
+    --------------------------------------------------
+    YOU ARE NOT ALLOWED TO:
+    --------------------------------------------------
+    - change job names
+    - change Docker images
+    - change command structure
+    - introduce new jobs
+    - introduce new variables or functions
+
+    You can ONLY modify:
+    - node assignment
+    - thread count
+    - order
+
+    --------------------------------------------------
+    JOB CHARACTERISTICS
+    --------------------------------------------------
+    - barnes, vips:
+      longest jobs → MUST start at order 1 and run in parallel on different nodes
+
+    - radix:
+      CPU-intensive → MUST run on node-a
+
+    - streamcluster:
+      CPU-scalable → prefer node-a
+
+    - canneal, freqmine:
+      medium/short jobs → flexible, but avoid overloading node-b
+
+    --------------------------------------------------
+    BAD PATTERNS (AVOID)
+    --------------------------------------------------
+    - placing radix on node-b
+    - placing canneal and freqmine both with 3 threads on node-b
+    - leaving node-a idle while node-b is overloaded
+    - running barnes and vips sequentially
+    - violating per-node thread limits
+
+    --------------------------------------------------
+    OPTIMIZATION GOAL
+    --------------------------------------------------
+    Priority:
+    1. NEVER violate memcached SLO (p95 < 1ms)
+    2. Minimize makespan (target < 200s)
+
+    Score:
+    max(0.0, 1.0 - max(0, makespan - 200) / 200.0)
+
+    --------------------------------------------------
+    KEY STRATEGY
+    --------------------------------------------------
+    - barnes and vips MUST start together at order 1
+    - keep node-a fully utilized (~6 threads)
+    - avoid idle gaps between order groups
+    - avoid overloading node-b
+
+    --------------------------------------------------
+    EVOLUTION STRATEGY
+    --------------------------------------------------
+    - Make SMALL modifications to the previous solution
+    - Do NOT completely rewrite the schedule
+    - Preserve good patterns and only adjust inefficient parts
+
   # Prompts to provide the LLM with. You can directly write the prompt in the config, e.g.
   # system_message: |
   #   You are an expert programmer tasked with optimizing the following code...
@@ -36,7 +148,8 @@ evaluator:
   cascade_evaluation: false
   parallel_evaluations: 1
   # Relevant parameters:
-  # timeout: 
+  timeout: 700
 
-diff_based_evolution: true
+# diff_based_evolution: true
+diff_based_evolution: false
 max_code_length: 50000

@@ -23,6 +23,15 @@ PREFERRED_CPUS = {
     Job.STREAMCLUSTER: [1, 2, 3, 4],
     Job.VIPS: [1, 2],
 }
+INITIAL_THREADS = {
+    Job.BARNES: 3,
+    Job.BLACKSCHOLES: 3,
+    Job.CANNEAL: 1,
+    Job.FREQMINE: 3,
+    Job.RADIX: 8,
+    Job.STREAMCLUSTER: 3,
+    Job.VIPS: 2,
+}
 
 
 HIGH_SCALING = [Job.RADIX, Job.STREAMCLUSTER, Job.FREQMINE, Job.BARNES]
@@ -125,10 +134,19 @@ class JobTimer:
         return self.total_time + elapsed
 
 
-def adjust_memcached_cores(client, logger, memcached_cores, load):
+def adjust_memcached_cores(client, logger, memcached_cores, load, reset=False):
     original = list(memcached_cores)
 
-    if load >= MEMCACHED_LOAD_HIGH and len(memcached_cores) < MAX_MEMCACHED_CORES:
+    if reset:
+        memcached_cores = [0, 1, 2]
+        set_mem_cpus(memcached_cores)
+        logger.update_cores(Job.MEMCACHED, memcached_cores)
+
+    if (
+        load >= MEMCACHED_LOAD_HIGH
+        and len(memcached_cores) < MAX_MEMCACHED_CORES
+        and not reset
+    ):
         free = [c for c in ALL_CORES if c not in memcached_cores]
         if free:
             memcached_cores.append(free[0])
@@ -139,7 +157,7 @@ def adjust_memcached_cores(client, logger, memcached_cores, load):
                 f"(load={load:.2f}, added core {free[0]})"
             )
 
-    elif load <= MEMCACHED_LOAD_LOW and len(memcached_cores) > 1:
+    elif load <= MEMCACHED_LOAD_LOW and len(memcached_cores) > 1 and not reset:
         memcached_cores.pop()
         set_mem_cpus(memcached_cores)
         logger.update_cores(Job.MEMCACHED, memcached_cores)
@@ -163,6 +181,9 @@ def assign_cores_to_job(available_cores, job):
         available_cores[i]
         for i in range(min(len(available_cores), len(PREFERRED_CPUS[job])))
     ]
+
+
+LOADS = {1: [], 2: [], 3: []}
 
 
 def pick_next_job(pending, load):
@@ -196,14 +217,25 @@ def start_job(client, logger, job, cores):
         detach=True,
         remove=False,
     )
-    logger.job_start(job, cores, len(cores))
+    logger.job_start(job, cores, INITIAL_THREADS[job])
     print(f"[scheduler] started {job.value} on cores {cores}")
     return container
 
 
 def update_job_cores(client, logger, container, job, new_cores):
-    set_cpus_docker(container, new_cores)
-    logger.update_cores(job, new_cores)
+    try:
+        set_cpus_docker(container, new_cores)
+        logger.update_cores(job, new_cores)
+    except subprocess.CalledProcessError:
+        i = 0
+        while container.status == "paused":
+            i += 1
+            time.sleep(0.01)
+            container.reload()
+            if i == 100:
+                return
+        set_cpus_docker(container, new_cores)
+        logger.update_cores(job, new_cores)
 
 
 def job_has_finished(container):
@@ -221,16 +253,16 @@ def schedule(client):
     set_mem_cpus(memcached_cores)
 
     pending = [
-        Job.BARNES,
-        Job.BLACKSCHOLES,
-        Job.CANNEAL,
-        Job.FREQMINE,
-        Job.RADIX,
         Job.STREAMCLUSTER,
+        Job.FREQMINE,
+        Job.CANNEAL,
+        Job.BLACKSCHOLES,
         Job.VIPS,
+        Job.BARNES,
+        Job.RADIX,
     ]
 
-    logger.custom_event(Job.MEMCACHED, f"initial cores: {memcached_cores}")
+    logger.job_start(Job.MEMCACHED, [str(x) for x in memcached_cores], 3)
 
     running_jobs = {}
 
@@ -238,20 +270,53 @@ def schedule(client):
     ra = []
     while len(finished_jobs) < 7:
         load = get_load()
+        logger.custom_event(Job.SCHEDULER, f"load {load}")
         mc_cores = get_memcached_cores()
         load = sum(load[c] for c in mc_cores) / len(mc_cores)
         ra.insert(0, load)
         print(ra)
-        load = sum(ra) / len(ra)
+        # load = sum(ra) / len(ra)
         if len(ra) > 4:
             ra.pop()
         print("Load:", load)
+        print(LOADS)
+        if (
+            LOADS[len(mc_cores)]
+            and abs(sum(LOADS[len(mc_cores)]) / len(LOADS[len(mc_cores)]) - load) > 10
+            and len(LOADS[len(mc_cores)]) >= 3
+        ):
+            LOADS[1] = []
+            LOADS[2] = []
+            LOADS[3] = []
+            adjust_memcached_cores(client, logger, mc_cores, load, reset=True)
 
-        adjust_memcached_cores(client, logger, memcached_cores, load)
+        LOADS[len(mc_cores)].append(load)
+        if load > MEMCACHED_LOAD_HIGH:
+            if len(mc_cores) < 3 and LOADS[len(mc_cores) + 1]:
+                # if (
+                #     sum(LOADS[len(mc_cores) + 1]) / len(LOADS[len(mc_cores) + 1])
+                #     > MEMCACHED_LOAD_LOW
+                # ):
+                adjust_memcached_cores(client, logger, mc_cores, 100.0)
+            # if len(mc_cores) < 3 and not LOADS[len(mc_cores) + 1]:
+            #     adjust_memcached_cores(client, logger, mc_cores, 100.0)
+
+        if load < MEMCACHED_LOAD_LOW:
+            if len(mc_cores) > 1 and LOADS[len(mc_cores) - 1]:
+                if (
+                    sum(LOADS[len(mc_cores) - 1]) / len(LOADS[len(mc_cores) - 1])
+                    < MEMCACHED_LOAD_HIGH
+                ):
+                    adjust_memcached_cores(client, logger, mc_cores, 0.0)
+            if len(mc_cores) > 1 and not LOADS[len(mc_cores) - 1]:
+                adjust_memcached_cores(client, logger, mc_cores, 0.0)
+        print(LOADS)
+        # if LOADS[len(mc_cores)]:
+        #     adjust_memcached_cores(client, logger, mc_cores, load)
 
         available = get_available_cores()
         if running_jobs == {} and pending:
-            next_job = pick_next_job(pending, load)
+            next_job = pending[0]
             job_cores = [
                 available[i]
                 for i in range(min(len(available), len(PREFERRED_CPUS[next_job])))
@@ -305,7 +370,7 @@ def schedule(client):
             if j in running_jobs.keys():
                 running_jobs.pop(j)
         if available and pending:
-            next_job = pick_next_job(pending, load)
+            next_job = pending[0]
             job_cores = [
                 available[i]
                 for i in range(min(len(available), len(PREFERRED_CPUS[next_job])))
@@ -324,7 +389,13 @@ def schedule(client):
 
         time.sleep(SCHEDULER_INTERVAL)
 
+    logger.custom_event(Job.SCHEDULER, "Jobs Finished")
     set_mem_cpus([0, 1, 2, 3])
+    logger.update_cores(Job.MEMCACHED, ["0", "1", "2", "3"])
+    start = time.time()
+    while (time.time() - start) < 61:
+        load = get_load()
+        logger.custom_event(Job.SCHEDULER, f"load {load}")
     logger.end()
 
 

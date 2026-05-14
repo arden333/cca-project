@@ -3,8 +3,31 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 BASE_DIR = "./"
-CONFIGS = ["t-1_c-1", "t-1_c-2", "t-1_c-3", "t-2_c-1", "t-2_c-2", "t-2_c-3", "t-3_c-1","t-3_c-2","t-3_c-3"]
-MARKERS = ['o', '^', 's', 'x', 'D', 'v', '*']
+CONFIGS = [
+    "t-1_c-1",
+    "t-1_c-2",
+    "t-1_c-3",
+    "t-2_c-1",
+    "t-2_c-2",
+    "t-2_c-3",
+    "t-3_c-1",
+    "t-3_c-2",
+    "t-3_c-3",
+]
+MARKERS = ["o", "^", "s", "x", "D", "v", "*"]
+
+LABELS = {
+    "t-1_c-1": "$T=1$, $C=1$",
+    "t-1_c-2": "$T=1$, $C=2$",
+    "t-1_c-3": "$T=1$, $C=3$",
+    "t-2_c-1": "$T=2$, $C=1$",
+    "t-2_c-2": "$T=2$, $C=2$",
+    "t-2_c-3": "$T=2$, $C=3$",
+    "t-3_c-1": "$T=3$, $C=1$",
+    "t-3_c-2": "$T=3$, $C=2$",
+    "t-3_c-3": "$T=3$, $C=3$",
+}
+
 
 def parse_file(filepath):
     qps_list = []
@@ -26,10 +49,9 @@ def parse_file(filepath):
 
 
 def aggregate_config(config):
-    files = sorted([
-        f for f in os.listdir(BASE_DIR)
-        if f.startswith(f"result_{config}_")
-    ])
+    files = sorted(
+        [f for f in os.listdir(BASE_DIR) if f.startswith(f"result_{config}_")]
+    )
 
     runs_qps = {}
     runs_p95 = {}
@@ -73,9 +95,9 @@ def plot_all():
             mean_p95,
             xerr=std_qps,
             yerr=std_p95,
-            #marker=MARKERS[idx],
+            # marker=MARKERS[idx],
             capsize=3,
-            label=config
+            label=LABELS[config],
         )
 
     plt.xlim(0, 125000)
@@ -83,7 +105,9 @@ def plot_all():
 
     plt.xlabel("Achieved QPS")
     plt.ylabel("95th Percentile Latency (ms)")
-    plt.title("Memcached Performance under Different Interference Types\n(Averaged over 3 runs)")
+    plt.title(
+        "Memcached Performance with different core ($C$) and thread ($T$) allocations\n(Averaged over 3 runs)"
+    )
 
     plt.legend(title="Configs")
     plt.grid(True)

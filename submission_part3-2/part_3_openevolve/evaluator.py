@@ -21,21 +21,18 @@ CLIENT_AGENT_A_INTERNAL = "10.0.16.3"
 CLIENT_AGENT_B_INTERNAL = "10.0.16.4"
 CLIENT_AGENT_A_EXTERNAL = "34.62.29.115"
 CLIENT_AGENT_B_EXTERNAL = "34.77.92.112"
-# CLIENT_MEASURE_EXTERNAL = "35.190.209.247" 
-# CLIENT_AGENT_A_INTERNAL = "10.0.16.7"
-# CLIENT_AGENT_B_INTERNAL = "10.0.16.4"
-# MEMCACHED_IP = get_memcached_ip()  
+
 SSH_KEY = os.path.expanduser("~/.ssh/cloud-computing")
 SSH_OPTS = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no"]
 
-PROGRAM_TIMEOUT = 650  # evaluator timeout(800)보다 작게 → OpenEvolve handler 절대 안 발동
+PROGRAM_TIMEOUT = 650  # set lower than the evaluator timeout(800)
 FAIL_RESULT = EvaluationResult(metrics={
         "combined_score": 0.0,
         "score": 0.0,
         "makespan": 9999.0,
         "mean_batch_job_time": 9999.0,
         "slo_violations": 999.0,
-    })  # 실패 통일
+    })  # unified failure result
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 def ssh_run(host, cmd):
@@ -111,7 +108,6 @@ def p95_violations(mcperf_file = "mcperf_output.txt"):
 def score(makespan, slo_violations):
     if slo_violations > 0 or makespan > 800:
         return 0.0
-    # return max (0.0, 1.0 - max(0.0, makespan - 200) / 200.0)
     return max (0.0, 1.0 - max(0.0, makespan - 200) / 600.0)
 
     
@@ -121,27 +117,25 @@ def evaluate(program_path: str) -> EvaluationResult:
     """
     MEMCACHED_IP = get_memcached_ip()  
 
-    # new. 이전 mcperf output 삭제
-    # if os.path.exists("mcperf_output.txt"):
-    #     os.remove("mcperf_output.txt")
+    # New: remove the previous mcperf output
     for f in ["mcperf_output.txt", "makespan.txt", "result.json", "job_times.json"]:
         if os.path.exists(f):
             os.remove(f)
 
-    # 1. 잔여 mcperf 전부 kill
+    # 1. Kill all remaining mcperf processes
     print("Killing existing mcperf processes...")
     kill_remote_mcperf(CLIENT_MEASURE_EXTERNAL)
     kill_remote_mcperf(CLIENT_AGENT_A_EXTERNAL)
     kill_remote_mcperf(CLIENT_AGENT_B_EXTERNAL)
     time.sleep(1)
 
-    # 2. agent-a, agent-b 시작
+    # 2. Start agent-a and agent-b
     print("Starting mcperf agents...")
     agent_a_proc = ssh_bg(CLIENT_AGENT_A_EXTERNAL, "cd memcache-perf-dynamic && ./mcperf -T 2 -A")
     agent_b_proc = ssh_bg(CLIENT_AGENT_B_EXTERNAL, "cd memcache-perf-dynamic && ./mcperf -T 4 -A")
     time.sleep(2)
 
-    # 3. loadonly
+    # 3. Run loadonly
     print("Running loadonly...")
     load_result = ssh_run(
         CLIENT_MEASURE_EXTERNAL,
@@ -155,7 +149,7 @@ def evaluate(program_path: str) -> EvaluationResult:
         agent_b_proc.terminate()
         return FAIL_RESULT
 
-    # 4. 본 mcperf 시작
+    # 4. Start the main mcperf measurement
     print("Starting main mcperf measurement...")
     mcperf_proc = ssh_bg(
         CLIENT_MEASURE_EXTERNAL,
@@ -166,7 +160,7 @@ def evaluate(program_path: str) -> EvaluationResult:
         f"--scan 30000:30500:5 > ~/mcperf_output.txt 2>&1"
     )
 
-    # 5. batch program 시작 (Popen — 모니터링 스레드가 kill 가능하도록)
+    # 5. Start the batch program (Popen — so the monitoring thread can kill it if needed)
     program_proc = subprocess.Popen(
         ["python3", program_path],
         stdout=subprocess.PIPE,
@@ -174,7 +168,7 @@ def evaluate(program_path: str) -> EvaluationResult:
         text=True
     )
 
-    # 6. mcperf 조기 종료 감지 스레드
+    # 6. Thread for detecting early mcperf termination
     batch_done = threading.Event()
     mcperf_failed = threading.Event()
 
@@ -197,7 +191,7 @@ def evaluate(program_path: str) -> EvaluationResult:
     monitor_thread = threading.Thread(target=monitor_mcperf, daemon=True)
     monitor_thread.start()
 
-    # 7. batch program 완료 대기
+    # 7. Wait for the batch program to complete
     try:
         stdout, stderr = program_proc.communicate(timeout=PROGRAM_TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -212,10 +206,9 @@ def evaluate(program_path: str) -> EvaluationResult:
         cleanup_k8s_jobs()
         return FAIL_RESULT
 
-    # batch 완료 시점에 반드시 set
     batch_done.set() 
 
-    # 8. mcperf 조기 종료 여부 확인
+    # 8. Check whether mcperf terminated early
     if mcperf_failed.is_set():
         print("Invalid test: mcperf died during batch execution.")
         return FAIL_RESULT
@@ -232,9 +225,9 @@ def evaluate(program_path: str) -> EvaluationResult:
 
     print(stdout)
 
-    # 9. mcperf 정상 종료 처리
+    # 9. Handle normal mcperf termination
     time.sleep(5)
-    mcperf_failed.set()  # 모니터 스레드가 중복 동작하지 않도록
+    mcperf_failed.set() 
     mcperf_proc.terminate()
     mcperf_proc.wait()
     kill_remote_mcperf(CLIENT_MEASURE_EXTERNAL)
@@ -243,7 +236,7 @@ def evaluate(program_path: str) -> EvaluationResult:
     agent_a_proc.terminate()
     agent_b_proc.terminate()
 
-    # 10. scp mcperf output
+    # 10. Copy the mcperf output using scp
     scp_result = subprocess.run(
         ["scp"] + SSH_OPTS + [
             f"ubuntu@{CLIENT_MEASURE_EXTERNAL}:~/mcperf_output.txt",
@@ -255,71 +248,12 @@ def evaluate(program_path: str) -> EvaluationResult:
         print(f"scp failed: {scp_result.stderr}")
         return FAIL_RESULT
 
-    # # new. client-measure에서 mcperf 백그라운드 실행
-    # mcperf_cmd = (
-    #     f"cd memcache-perf-dynamic && "
-    #     f"./mcperf -s {MEMCACHED_IP} "
-    #     f"-a {CLIENT_AGENT_A_INTERNAL} -a {CLIENT_AGENT_B_INTERNAL} "
-    #     f"--noload -T 6 -C 4 -D 4 -Q 1000 -c 4 -t 600 "
-    #     f"--scan 30000:30500:5 > ~/mcperf_output.txt 2>&1"
-    # )
-    # mcperf_proc = subprocess.Popen(
-    #     ["ssh", "-i", SSH_KEY,
-    #      "-o", "StrictHostKeyChecking=no",
-    #      f"ubuntu@{CLIENT_MEASURE_EXTERNAL}",
-    #      mcperf_cmd]
-    # )
-
-    # # 1. run the program
-    # # result = subprocess.run(["python3", program_path], capture_output=True, text=True)
-    # try:
-    #     result = subprocess.run(
-    #         ["python3", program_path],
-    #         capture_output=True,
-    #         text=True,
-    #         timeout=PROGRAM_TIMEOUT
-    #     )
-    # except subprocess.TimeoutExpired:
-    #     mcperf_proc.terminate()
-    #     return FAIL_RESULT
-    #     # return EvaluationResult(
-    #     #     metrics={"combined_score": 0.0, "score": 0.0, "makespan": 9999, "slo_violations": 999},
-    #     #     # artifacts="Program timed out."
-    #     # )
-    # finally:
-    #     mcperf_proc.terminate()
-
-    # print(result.stdout)
-
-    # if result.returncode != 0:
-    #     print(f"Program error:\n{result.stderr}")
-    #     return FAIL_RESULT
-    #     # return EvaluationResult(
-    #     #     metrics={"combined_score": 0.0,"score": 0.0, "makespan": 9999, "slo_violations": 999},
-    #     #     # artifacts=f"Program crashed: {result.stderr[:500]}"
-    #     # )
-
-    # # new. 2. scp mcperf output
-    # scp_result = subprocess.run(
-    #     ["scp", "-i", SSH_KEY,
-    #      "-o", "StrictHostKeyChecking=no",
-    #      f"ubuntu@{CLIENT_MEASURE_EXTERNAL}:~/mcperf_output.txt",
-    #      "./mcperf_output.txt"],
-    #     capture_output=True, text=True
-    # )
-    # if scp_result.returncode != 0:
-    #     print(f"scp failed: {scp_result.stderr}")
-
-
-    # 2. read makespan
+    # 11. Read makespan
     try:
         makespan = float(open("makespan.txt").read().strip())
     except (FileNotFoundError, ValueError) as e:
         return FAIL_RESULT
-        #     return EvaluationResult(
-        #     metrics={"combined_score": 0.0, "score": 0.0, "makespan": 9999, "slo_violations": 999},
-        #     # artifacts=f"makespan.txt not found: {e}"
-        # )
+        
     try:
         with open("job_times.json") as f:
             job_info = json.load(f)
@@ -332,13 +266,13 @@ def evaluate(program_path: str) -> EvaluationResult:
 
     mean_batch_job_time = float(job_info.get("mean_batch_job_time", 9999.0))
 
-    # 3. check slo violations
+    # 12. Check SLO violations
     violation = p95_violations("mcperf_output.txt")
 
-    # 4. calculate score
+    # 13. Calculate score
     fin_score = score(makespan, violation)
 
-    # 5. save per-evaluation artifacts
+    # 14. Save per-evaluation artifacts
     artifact_dir = "eval_artifacts"
     os.makedirs(artifact_dir, exist_ok=True)
 
@@ -365,7 +299,6 @@ def evaluate(program_path: str) -> EvaluationResult:
         f"Mean batch job time: {mean_batch_job_time}s, "
         f"SLO Violations: {violation}, Score: {fin_score:.4f}"
     )
-    # print(f"Evaluation result - Makespan: {makespan}s, SLO Violations: {violation}, Score: {fin_score:.4f}")
 
     return EvaluationResult(
         metrics={
@@ -375,5 +308,4 @@ def evaluate(program_path: str) -> EvaluationResult:
             "mean_batch_job_time": mean_batch_job_time,
             "slo_violations": violation,
         }
-        # artifacts=f"Makespan: {makespan:.1f}s, SLO violations: {violation}, Score: {fin_score:.4f}"
     )

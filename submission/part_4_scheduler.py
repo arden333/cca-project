@@ -34,9 +34,6 @@ INITIAL_THREADS = {
 }
 
 
-HIGH_SCALING = [Job.RADIX, Job.STREAMCLUSTER, Job.FREQMINE, Job.BARNES]
-LOW_SCALING = [Job.VIPS, Job.BLACKSCHOLES, Job.CANNEAL]
-
 JOB_COMMANDS = {
     Job.BARNES: "/bin/sh -c './run -a run -S splash2x -p barnes -i native -n 3'",
     Job.BLACKSCHOLES: "/bin/sh -c './run -a run -S parsec -p blackscholes -i native -n 3'",
@@ -176,18 +173,6 @@ def assign_cores_to_job(available_cores, job):
 
 
 LOADS = {1: [], 2: [], 3: []}
-
-
-def pick_next_job(pending, load):
-    if load < JOB_LOAD_THRESHOLD:
-        candidates = [j for j in HIGH_SCALING if j in pending]
-    else:
-        candidates = [j for j in LOW_SCALING if j in pending]
-
-    if not candidates:
-        candidates = pending
-
-    return candidates[0]
 
 
 def start_job(client, logger, job, cores):

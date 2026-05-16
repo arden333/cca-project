@@ -102,14 +102,19 @@ def plot_all():
 
     plt.xlim(0, 125000)
     plt.ylim(0, 6)
+    plt.xticks(
+        [20000, 40000, 60000, 80000, 100000, 120000],
+        ["20K", "40K", "60K", "80K", "100K", "120K"],
+    )
 
     plt.xlabel("Achieved QPS")
     plt.ylabel("95th Percentile Latency (ms)")
+    plt.axhline(0.8, color="gray", linestyle="--", label="0.8ms SLO", alpha=0.8)
     plt.title(
         "Memcached Performance with different core ($C$) and thread ($T$) allocations\n(Averaged over 3 runs)"
     )
 
-    plt.legend(title="Configs")
+    plt.legend()
     plt.grid(True)
 
     plt.savefig("./part4-1_plot.png", dpi=300)
